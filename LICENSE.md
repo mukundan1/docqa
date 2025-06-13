@@ -1,0 +1,2 @@
+Open LLM used in this project is under the umbrella of IBM WatsonX AI (https://www.ibm.com/watsonx-ai)
+Under the license of IBM, this OpenLLM is distributed under Apache License 2.0 - https://www.apache.org/licenses/LICENSE-2.0
