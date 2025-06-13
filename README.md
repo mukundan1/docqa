@@ -38,3 +38,66 @@
 - **If the question is out of scope**, DoclingQ&A informs the user instead of hallucinating.  
 
 ---
+
+## **🎯 Why Use DoclingQ&A Instead of ChatGPT or DeepSeek?**  
+
+| Feature | **ChatGPT/DeepSeek** ❌ | **DoclingQ&A** ✅ |
+|---------|-----------------|---------|
+| Retrieves from uploaded documents | ❌ No | ✅ Yes |
+| Handles multiple documents | ❌ No | ✅ Yes |
+| Extracts structured data from PDFs | ❌ No | ✅ Yes |
+| Prevents hallucinations | ❌ No | ✅ Yes |
+| Fact-checks answers | ❌ No | ✅ Yes |
+| Detects out-of-scope queries | ❌ No | ✅ Yes |
+
+🚀 **DoclingQ&A is built for enterprise-grade document intelligence, research, and compliance workflows.**  
+
+---
+
+## **📦 Installation**  
+
+### **1️⃣ Clone the Repository**  
+```bash
+git clone https://github.com/mukundan1/docqa.git 
+cd docqa
+```
+
+### **2️⃣ Set Up Virtual Environment**  
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+```
+
+### **3️⃣ Install Dependencies**  
+```bash
+uv pip install -r requirements.txt
+```
+
+### **4️⃣ Set Up API Keys**  
+Requires an OpenAI API key for processing. Add it to a `.env` file:
+```bash
+OPENAI_API_KEY=your-api-key-here
+```
+
+### **5️⃣ Run the Application** 
+```bash
+python app.py
+```
+
+DoclingQ&A will be accessible at `http://0.0.0.0:7860`.
+
+
+## 🖥️ Instructions to use  
+
+1️⃣ **Upload one or more documents** (PDF, JSON, DOCX, TXT, Markdown).  
+
+2️⃣ **Enter a question** related to the document.  
+
+3️⃣ **Click "Submit"** – DoclingQ&A retrieves, analyzes, and verifies the response.  
+
+4️⃣ **Review the answer & verification report** for confidence.  
+
+5️⃣ **If the question is out of scope**, DoclingQ&A will inform instead of hallucination.  
+
+## Training Module with Guided Project - provided by IBM Skills Network
+an 1-hour implementation.   

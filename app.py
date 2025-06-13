@@ -1,216 +1,192 @@
-import os
-from dotenv import load_dotenv
-from langchain.document_loaders import DoclingLoader
-from langchain.text_splitter import MarkdownHeaderTextSplitter
-from langchain.vectorstores import Chroma
-from langchain.embeddings import HuggingFaceEmbeddings
-from langgraph import StateGraph, AgentState
-from ibm_watsonx_ai.foundation_models import ModelInference
-from ibm_watsonx_ai import Credentials, APIClient
-from typing import List, Dict
 import gradio as gr
+import hashlib
+from typing import List, Dict
+import os
 
-# Load environment variables
-load_dotenv()
+from document_processor.file_handler import DocumentProcessor
+from retriever.builder import RetrieverBuilder
+from agents.workflow import AgentWorkflow
+from config import constants, settings
+from utils.logging import logger
 
-class DocumentProcessor:
-    def __init__(self):
-        self.headers_to_split_on = [
-            ("#", "Header 1"),
-            ("##", "Header 2"),
-            ("###", "Header 3"),
-        ]
-        self.cache_dir = "document_cache"
-        os.makedirs(self.cache_dir, exist_ok=True)
+# 1) Define some example data 
+#    (i.e. question + paths to documents relevant to that question).
+EXAMPLES = {
+    "Google 2024 Environmental Report": {
+        "question": "Retrieve the data center PUE efficiency values in Singapore 2nd facility in 2019 and 2022. Also retrieve regional average CFE in Asia pacific in 2023",
+        "file_paths": ["data/Environmental Report 2024.pdf"]  
+    },
+    "DeepSeek-R1 Technical Report": {
+        "question": "Summarize DeepSeek-R1 model's performance evaluation on all coding tasks against OpenAI o1-mini model",
+        "file_paths": ["data/DeepSeek Report.pdf"]
+    }
+}
 
-    def process(self, files: List[str]) -> List[str]:
-        chunks = []
-        for file in files:
-            # Load and process document
-            loader = DoclingLoader(file)
-            documents = loader.load()
-            
-            # Split into chunks using headers
-            text_splitter = MarkdownHeaderTextSplitter(headers=self.headers_to_split_on)
-            chunked_docs = text_splitter.split_text(documents[0].page_content)
-            
-            chunks.extend(chunked_docs)
-        
-        return chunks
+def main():
+    processor = DocumentProcessor()
+    retriever_builder = RetrieverBuilder()
+    workflow = AgentWorkflow()
 
-class ResearchAgent:
-    def __init__(self):
-        credentials = Credentials(
-            url=os.getenv("WATSONX_URL"),
-        )
-        self.model = ModelInference(
-            model_id="meta-llama/llama-3-2-90b-vision-instruct",
-            credentials=credentials,
-            project_id="skills-network",
-            params={
-                "max_tokens": 300,
-                "temperature": 0.3,
-            }
-        )
+    # Define custom CSS for styling
+    css = """
+    .title {
+        font-size: 1.5em !important; 
+        text-align: center !important;
+        color: #FFD700; 
+    }
 
-    def generate(self, question: str, documents: List[str]) -> Dict:
-        context = "\n\n".join(documents)
-        prompt = f"""
-        You are an AI assistant designed to provide precise and factual answers based on the given context.
-        **Instructions:**
-        - Answer the following question using only the provided context.
-        - Be clear, concise, and factual.
-        - Return as much information as you can get from the context.
-        
-        **Question:** {question}
-        **Context:**
-        {context}
-        **Provide your answer below:**
-        """
-        
-        response = self.model.chat(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-        
-        return {
-            "draft_answer": response['choices'][0]['message']['content'],
-            "context_used": context
+    .subtitle {
+        font-size: 1em !important; 
+        text-align: center !important;
+        color: #FFD700; 
+    }
+
+    .text {
+        text-align: center;
+    }
+    """
+
+    js = """
+    function createGradioAnimation() {
+        var container = document.createElement('div');
+        container.id = 'gradio-animation';
+        container.style.fontSize = '2em';
+        container.style.fontWeight = 'bold';
+        container.style.textAlign = 'center';
+        container.style.marginBottom = '20px';
+        container.style.color = '#eba93f';
+
+        var text = 'Welcome to DoclingQ&A';
+        for (var i = 0; i < text.length; i++) {
+            (function(i){
+                setTimeout(function(){
+                    var letter = document.createElement('span');
+                    letter.style.opacity = '0';
+                    letter.style.transition = 'opacity 0.1s';
+                    letter.innerText = text[i];
+
+                    container.appendChild(letter);
+
+                    setTimeout(function() {
+                        letter.style.opacity = '0.9';
+                    }, 50);
+                }, i * 250);
+            })(i);
         }
 
-class VerificationAgent:
-    def __init__(self):
-        credentials = Credentials(
-            url=os.getenv("WATSONX_URL"),
-        )
-        self.model = ModelInference(
-            model_id="ibm/granite-3-8b-instruct",
-            credentials=credentials,
-            project_id="skills-network",
-            params={
-                "max_tokens": 200,
-                "temperature": 0.0,
-            }
-        )
+        var gradioContainer = document.querySelector('.gradio-container');
+        gradioContainer.insertBefore(container, gradioContainer.firstChild);
 
-    def check(self, answer: str, documents: List[str]) -> Dict:
-        context = "\n\n".join(documents)
-        prompt = f"""
-        You are an AI assistant designed to verify the accuracy and relevance of answers based on provided context.
-        **Instructions:**
-        - Verify the following answer against the provided context.
-        - Check for:
-        1. Direct/indirect factual support (YES/NO)
-        2. Unsupported claims (list any if present)
-        3. Contradictions (list any if present)
-        4. Relevance to the question (YES/NO)
-        - Provide additional details or explanations where relevant.
-        - Respond in the exact format specified below without adding any unrelated information.
-        **Format:**
-        Supported: YES/NO
-        Unsupported Claims: [item1, item2, ...]
-        Contradictions: [item1, item2, ...]
-        Relevant: YES/NO
-        Additional Details: [Any extra information or explanations]
-        **Answer:** {answer}
-        **Context:**
-        {context}
-        **Respond ONLY with the above format.**
-        """
-        
-        response = self.model.chat(
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-        
-        return response['choices'][0]['message']['content']
-
-def process_documents(files):
-    doc_processor = DocumentProcessor()
-    chunks = doc_processor.process(files)
-    
-    # Create vector store
-    embeddings = HuggingFaceEmbeddings()
-    docsearch = Chroma.from_texts(
-        chunks,
-        embeddings,
-        metadatas=[{"source": f"chunk_{i}"} for i in range(len(chunks))]
-    )
-    
-    return docsearch
-
-def get_answer(question, docsearch):
-    # Retrieve relevant documents
-    docs = docsearch.similarity_search(question, k=3)
-    
-    # Research phase
-    research_agent = ResearchAgent()
-    research_result = research_agent.generate(question, docs)
-    
-    # Verification phase
-    verification_agent = VerificationAgent()
-    verification_result = verification_agent.check(
-        research_result["draft_answer"],
-        docs
-    )
-    
-    return {
-        "answer": research_result["draft_answer"],
-        "verification": verification_result,
-        "context": research_result["context_used"]
+        return 'Animation created';
     }
+    """
 
-def chat_interface(question, files):
-    if not files:
-        return "Please upload documents first."
-    
-    docsearch = process_documents(files)
-    result = get_answer(question, docsearch)
-    
-    return {
-        "answer": result["answer"],
-        "verification": result["verification"],
-        "context": result["context"]
-    }
+    with gr.Blocks(theme=gr.themes.Citrus(), title="DoclingQ&A", css=css, js=js) as demo:
+        gr.Markdown("## DoclingQ&A: powered by IBMSkillz", elem_classes="subtitle")
+        gr.Markdown("📤 Upload your document(s), enter your query then hit Submit", elem_classes="text")
+        gr.Markdown("Or you can select one of the examples from the drop-down menu, select Load Example then hit Submit", elem_classes="text")
+        gr.Markdown("⚠️ **Note:** DoclingQ&A only accepts documents in these formats: '.pdf', '.docx', '.txt', '.md', '.json'", elem_classes="text")
 
-# Create Gradio interface
-def create_interface():
-    with gr.Blocks() as demo:
-        gr.Markdown("# DCChat - Document Chat Application")
-        
+        # 2) Maintain the session state for retrieving doc changes
+        session_state = gr.State({
+            "file_hashes": frozenset(),
+            "retriever": None
+        })
+
+        # 3) Layout 
         with gr.Row():
             with gr.Column():
-                file_input = gr.File(
-                    label="Upload Documents",
-                    file_types=[".pdf", ".docx", ".txt"],
-                    multiple=True
+                # Section for Examples
+                gr.Markdown("### Example")
+                example_dropdown = gr.Dropdown(
+                    label="Select an Example",
+                    choices=list(EXAMPLES.keys()),
+                    value=None,  # initially unselected
                 )
+                load_example_btn = gr.Button("Load Example")
+
+                # Standard input components
+                files = gr.Files(label="📄 Upload Documents", file_types=constants.ALLOWED_TYPES)
+                question = gr.Textbox(label="❓ Question", lines=3)
+
+                submit_btn = gr.Button("Submit")
                 
             with gr.Column():
-                question_input = gr.Textbox(
-                    label="Ask a question about the documents",
-                    placeholder="Enter your question here..."
+                answer_output = gr.Textbox(label="🐥 Answer", interactive=False)
+                verification_output = gr.Textbox(label="✅ Verification Report")
+
+        # 4) Helper function to load example into the UI
+        def load_example(example_key: str):
+            """
+            Given a key like 'Example 1', 
+            read the relevant docs from disk and return
+            them as file-like objects, plus the example question.
+            """
+            if not example_key or example_key not in EXAMPLES:
+                return [], ""  # blank if not found
+
+            ex_data = EXAMPLES[example_key]
+            question = ex_data["question"]
+            file_paths = ex_data["file_paths"]
+
+            # Prepare the file list to return. We read them from disk to
+            # give Gradio something it can handle as "uploaded" files.
+            loaded_files = []
+            for path in file_paths:
+                if os.path.exists(path):
+                    # Gradio can accept a path directly, or a file-like object
+                    loaded_files.append(path)
+                else:
+                    logger.warning(f"File not found: {path}")
+
+            # The function can return lists matching the outputs we define below
+            return loaded_files, question
+
+        load_example_btn.click(
+            fn=load_example,
+            inputs=[example_dropdown],
+            outputs=[files, question]
+        )
+
+        # 5) Standard flow for question submission
+        def process_question(question_text: str, uploaded_files: List, state: Dict):
+            """Handle questions with document caching."""
+            try:
+                if not question_text.strip():
+                    raise ValueError("❌ Question cannot be empty")
+                if not uploaded_files:
+                    raise ValueError("❌ No documents uploaded")
+
+                current_hashes = _get_file_hashes(uploaded_files)
+                
+                if state["retriever"] is None or current_hashes != state["file_hashes"]:
+                    logger.info("Processing new/changed documents...")
+                    chunks = processor.process(uploaded_files)
+                    retriever = retriever_builder.build_hybrid_retriever(chunks)
+                    
+                    state.update({
+                        "file_hashes": current_hashes,
+                        "retriever": retriever
+                    })
+                
+                result = workflow.full_pipeline(
+                    question=question_text,
+                    retriever=state["retriever"]
                 )
                 
-        submit_btn = gr.Button("Submit")
-        
-        output = gr.JSON(label="Response")
-        
+                return result["draft_answer"], result["verification_report"], state
+                    
+            except Exception as e:
+                logger.error(f"Processing error: {str(e)}")
+                return f"❌ Error: {str(e)}", "", state
+
         submit_btn.click(
-            fn=chat_interface,
-            inputs=[question_input, file_input],
-            outputs=output
+            fn=process_question,
+            inputs=[question, files, session_state],
+            outputs=[answer_output, verification_output, session_state]
         )
-    
-    return demo
+
+    demo.launch(server_port=7860, server_name="0.0.0.0")
 
 def _get_file_hashes(uploaded_files: List) -> frozenset:
     """Generate SHA-256 hashes for uploaded files."""
