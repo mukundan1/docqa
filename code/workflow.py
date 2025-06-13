@@ -109,3 +109,24 @@ class AgentWorkflow:
             logger.error(f"Workflow execution failed: {e}")
             raise
     
+    def _research_step(self, state: AgentState) -> Dict:
+        print(f"[DEBUG] Entered _research_step with question='{state['question']}'")
+        result = self.researcher.generate(state["question"], state["documents"])
+        print("[DEBUG] Researcher returned draft answer.")
+        return {"draft_answer": result["draft_answer"]}
+    
+    def _verification_step(self, state: AgentState) -> Dict:
+        print("[DEBUG] Entered _verification_step. Verifying the draft answer...")
+        result = self.verifier.check(state["draft_answer"], state["documents"])
+        print("[DEBUG] VerificationAgent returned a verification report.")
+        return {"verification_report": result["verification_report"]}
+    
+    def _decide_next_step(self, state: AgentState) -> str:
+        verification_report = state["verification_report"]
+        print(f"[DEBUG] _decide_next_step with verification_report='{verification_report}'")
+        if "Supported: NO" in verification_report or "Relevant: NO" in verification_report:
+            logger.info("[DEBUG] Verification indicates re-research needed.")
+            return "re_research"
+        else:
+            logger.info("[DEBUG] Verification successful, ending workflow.")
+            return "end"
