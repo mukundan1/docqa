@@ -60,7 +60,7 @@ class DocumentProcessor:
 
     def _process_file(self, file) -> List:
         """Original processing logic with Docling"""
-        if not file.name.endswith(('.pdf', '.docx', '.txt', '.md')):
+        if not file.name.endswith(('.pdf', '.docx', '.txt', '.md', '.json')):
             logger.warning(f"Skipping unsupported file type: {file.name}")
             return []
 

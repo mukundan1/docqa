@@ -5,5 +5,6 @@ from .builder import RetrieverBuilder
 from .file_handler import DocumentProcessor
 from .relevance_checker import RelevanceChecker
 from .logging import logger
+from .settings import settings
 
-__all__ = ["ResearchAgent", "VerificationAgent", "AgentWorkflow", "RetrieverBuilder", "DocumentProcessor", "RelevanceChecker", "logger"]  
+__all__ = ["ResearchAgent", "VerificationAgent", "AgentWorkflow", "RetrieverBuilder", "DocumentProcessor", "RelevanceChecker", "logger", "settings"]  
