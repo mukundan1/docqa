@@ -1,7 +1,8 @@
 import chromadb
 import os
 from langchain_community.document_loaders import TextLoader
-
+from langchain_groq import ChatGroq
+from langchain.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_huggingface import HuggingFaceEmbeddings
 
@@ -121,5 +122,40 @@ def insert_publications(collection: chromadb.Collection, publications: list[str]
             documents=chunked_publication,
         )
         next_id += len(chunked_publication)
+
+
+#Answering the question
+def answer_research_question(query, collection, embeddings, llm):
+    """Generate an answer based on retrieved research"""
+    
+    # Get relevant research chunks
+    relevant_chunks = search_research_db(query, collection, embeddings, top_k=3)
+    
+    # Build context from research
+    context = "\n\n".join([
+        f"From {chunk['title']}:\n{chunk['content']}" 
+        for chunk in relevant_chunks
+    ])
+    
+    # Create research-focused prompt
+    prompt_template = PromptTemplate(
+        input_variables=["context", "question"],
+        template="""
+Based on the following research findings, answer the researcher's question:
+
+Research Context:
+{context}
+
+Researcher's Question: {question}
+
+Answer: Provide a comprehensive answer based on the research findings above.
+"""
+    )
+    
+    # Generate answer
+    prompt = prompt_template.format(context=context, question=query)
+    response = llm.invoke(prompt)
+    
+    return response.content, relevant_chunks
 
 
