@@ -212,6 +212,13 @@ def create_interface():
     
     return demo
 
+def _get_file_hashes(uploaded_files: List) -> frozenset:
+    """Generate SHA-256 hashes for uploaded files."""
+    hashes = set()
+    for file in uploaded_files:
+        with open(file.name, "rb") as f:
+            hashes.add(hashlib.sha256(f.read()).hexdigest())
+    return frozenset(hashes)
+
 if __name__ == "__main__":
-    demo = create_interface()
-    demo.launch()
+    main()
