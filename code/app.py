@@ -1,194 +1,217 @@
-import chromadb
 import os
-import torch
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.document_loaders import TextLoader
-from langchain_groq import ChatGroq
-from langchain.prompts import PromptTemplate
-from langchain_text_splitters import RecursiveCharacterTextSplitter
+from dotenv import load_dotenv
+from langchain.document_loaders import DoclingLoader
+from langchain.text_splitter import MarkdownHeaderTextSplitter
+from langchain.vectorstores import Chroma
+from langchain.embeddings import HuggingFaceEmbeddings
+from langgraph import StateGraph, AgentState
+from ibm_watsonx_ai.foundation_models import ModelInference
+from ibm_watsonx_ai import Credentials, APIClient
+from typing import List, Dict
+import gradio as gr
 
-# Initialize ChromaDB
-client = chromadb.PersistentClient(path="./research_db")
-collection = client.get_or_create_collection(
-    name="ml_publications",
-    metadata={"hnsw:space": "cosine"}
-)
+# Load environment variables
+load_dotenv()
 
-# Set up our embedding model
-embeddings = HuggingFaceEmbeddings(
-    model_name="sentence-transformers/all-MiniLM-L6-v2"
-)
+class DocumentProcessor:
+    def __init__(self):
+        self.headers_to_split_on = [
+            ("#", "Header 1"),
+            ("##", "Header 2"),
+            ("###", "Header 3"),
+        ]
+        self.cache_dir = "document_cache"
+        os.makedirs(self.cache_dir, exist_ok=True)
 
-#Loading the publications
-def load_research_publications(documents_path):
-    """Load research publications from .txt files and return as list of strings"""
-    
-    # List to store all documents
-    documents = []
-    
-    # Load each .txt file in the documents folder
-    for file in os.listdir(documents_path):
-        if file.endswith(".txt"):
-            file_path = os.path.join(documents_path, file)
-            try:
-                loader = TextLoader(file_path)
-                loaded_docs = loader.load()
-                documents.extend(loaded_docs)
-                print(f"Successfully loaded: {file}")
-            except Exception as e:
-                print(f"Error loading {file}: {str(e)}")
-    
-    print(f"\nTotal documents loaded: {len(documents)}")
-    
-    # Extract content as strings and return
-    publications = []
-    for doc in documents:
-        publications.append(doc.page_content)
-    
-    return publications
+    def process(self, files: List[str]) -> List[str]:
+        chunks = []
+        for file in files:
+            # Load and process document
+            loader = DoclingLoader(file)
+            documents = loader.load()
+            
+            # Split into chunks using headers
+            text_splitter = MarkdownHeaderTextSplitter(headers=self.headers_to_split_on)
+            chunked_docs = text_splitter.split_text(documents[0].page_content)
+            
+            chunks.extend(chunked_docs)
+        
+        return chunks
 
-
-#Chunk
-def chunk_research_paper(paper_content, title):
-    """Break a research paper into searchable chunks"""
-    
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,          # ~200 words per chunk
-        chunk_overlap=200,        # Overlap to preserve context
-        separators=["\n\n", "\n", ". ", " ", ""]
-    )
-    
-    chunks = text_splitter.split_text(paper_content)
-    
-    # Add metadata to each chunk
-    chunk_data = []
-    for i, chunk in enumerate(chunks):
-        chunk_data.append({
-            "content": chunk,
-            "title": title,
-            "chunk_id": f"{title}_{i}",
-        })
-    
-    return chunk_data
-
-
-#Embed documents
-def embed_documents(documents: list[str]) -> list[list[float]]:
-    """
-    Embed documents using a model.
-    """
-    device = (
-        "cuda"
-        if torch.cuda.is_available()
-        else "mps" if torch.backends.mps.is_available() else "cpu"
-    )
-    model = HuggingFaceEmbeddings(
-        model_name="sentence-transformers/all-MiniLM-L6-v2",
-        model_kwargs={"device": device},
-    )
-
-    embeddings = model.embed_documents(documents)
-    return embeddings
-
-
-#Search and retrieval
-def search_research_db(query, collection, embeddings, top_k=5):
-    """Find the most relevant research chunks for a query"""
-    
-    # Convert question to vector
-    query_vector = embeddings.embed_query(query)
-    
-    # Search for similar content
-    results = collection.query(
-        query_embeddings=[query_vector],
-        n_results=top_k,
-        include=["documents", "metadatas", "distances"]
-    )
-    
-    # Format results
-    relevant_chunks = []
-    for i, doc in enumerate(results["documents"][0]):
-        relevant_chunks.append({
-            "content": doc,
-            "title": results["metadatas"][0][i]["title"],
-            "similarity": 1 - results["distances"][0][i]  # Convert distance to similarity
-        })
-    
-    return relevant_chunks
-    
-
-#Insertion into vector database   
-def insert_publications(collection: chromadb.Collection, publications: list[str]):
-    """
-    Insert documents into a ChromaDB collection.
-
-    Args:
-        collection (chromadb.Collection): The collection to insert documents into
-        publications (list[str]): The documents to insert
-
-    Returns:
-        None
-    """
-    next_id = collection.count()
-
-    for publication in publications:
-        chunked_publication = chunk_publication(publication)
-        embeddings = embed_documents(chunked_publication)
-        ids = list(range(next_id, next_id + len(chunked_publication)))
-        ids = [f"document_{id}" for id in ids]
-        collection.add(
-            embeddings=embeddings,
-            ids=ids,
-            documents=chunked_publication,
+class ResearchAgent:
+    def __init__(self):
+        credentials = Credentials(
+            url=os.getenv("WATSONX_URL"),
         )
-        next_id += len(chunked_publication)
+        self.model = ModelInference(
+            model_id="meta-llama/llama-3-2-90b-vision-instruct",
+            credentials=credentials,
+            project_id="skills-network",
+            params={
+                "max_tokens": 300,
+                "temperature": 0.3,
+            }
+        )
 
+    def generate(self, question: str, documents: List[str]) -> Dict:
+        context = "\n\n".join(documents)
+        prompt = f"""
+        You are an AI assistant designed to provide precise and factual answers based on the given context.
+        **Instructions:**
+        - Answer the following question using only the provided context.
+        - Be clear, concise, and factual.
+        - Return as much information as you can get from the context.
+        
+        **Question:** {question}
+        **Context:**
+        {context}
+        **Provide your answer below:**
+        """
+        
+        response = self.model.chat(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+        
+        return {
+            "draft_answer": response['choices'][0]['message']['content'],
+            "context_used": context
+        }
 
-#Answering the question
-def answer_research_question(query, collection, embeddings, llm):
-    """Generate an answer based on retrieved research"""
+class VerificationAgent:
+    def __init__(self):
+        credentials = Credentials(
+            url=os.getenv("WATSONX_URL"),
+        )
+        self.model = ModelInference(
+            model_id="ibm/granite-3-8b-instruct",
+            credentials=credentials,
+            project_id="skills-network",
+            params={
+                "max_tokens": 200,
+                "temperature": 0.0,
+            }
+        )
+
+    def check(self, answer: str, documents: List[str]) -> Dict:
+        context = "\n\n".join(documents)
+        prompt = f"""
+        You are an AI assistant designed to verify the accuracy and relevance of answers based on provided context.
+        **Instructions:**
+        - Verify the following answer against the provided context.
+        - Check for:
+        1. Direct/indirect factual support (YES/NO)
+        2. Unsupported claims (list any if present)
+        3. Contradictions (list any if present)
+        4. Relevance to the question (YES/NO)
+        - Provide additional details or explanations where relevant.
+        - Respond in the exact format specified below without adding any unrelated information.
+        **Format:**
+        Supported: YES/NO
+        Unsupported Claims: [item1, item2, ...]
+        Contradictions: [item1, item2, ...]
+        Relevant: YES/NO
+        Additional Details: [Any extra information or explanations]
+        **Answer:** {answer}
+        **Context:**
+        {context}
+        **Respond ONLY with the above format.**
+        """
+        
+        response = self.model.chat(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ]
+        )
+        
+        return response['choices'][0]['message']['content']
+
+def process_documents(files):
+    doc_processor = DocumentProcessor()
+    chunks = doc_processor.process(files)
     
-    # Get relevant research chunks
-    relevant_chunks = search_research_db(query, collection, embeddings, top_k=3)
-    
-    # Build context from research
-    context = "\n\n".join([
-        f"From {chunk['title']}:\n{chunk['content']}" 
-        for chunk in relevant_chunks
-    ])
-    
-    # Create research-focused prompt
-    prompt_template = PromptTemplate(
-        input_variables=["context", "question"],
-        template="""
-Based on the following research findings, answer the researcher's question:
-
-Research Context:
-{context}
-
-Researcher's Question: {question}
-
-Answer: Provide a comprehensive answer based on the research findings above.
-"""
+    # Create vector store
+    embeddings = HuggingFaceEmbeddings()
+    docsearch = Chroma.from_texts(
+        chunks,
+        embeddings,
+        metadatas=[{"source": f"chunk_{i}"} for i in range(len(chunks))]
     )
     
-    # Generate answer
-    prompt = prompt_template.format(context=context, question=query)
-    response = llm.invoke(prompt)
+    return docsearch
+
+def get_answer(question, docsearch):
+    # Retrieve relevant documents
+    docs = docsearch.similarity_search(question, k=3)
     
-    return response.content, relevant_chunks
+    # Research phase
+    research_agent = ResearchAgent()
+    research_result = research_agent.generate(question, docs)
+    
+    # Verification phase
+    verification_agent = VerificationAgent()
+    verification_result = verification_agent.check(
+        research_result["draft_answer"],
+        docs
+    )
+    
+    return {
+        "answer": research_result["draft_answer"],
+        "verification": verification_result,
+        "context": research_result["context_used"]
+    }
 
+def chat_interface(question, files):
+    if not files:
+        return "Please upload documents first."
+    
+    docsearch = process_documents(files)
+    result = get_answer(question, docsearch)
+    
+    return {
+        "answer": result["answer"],
+        "verification": result["verification"],
+        "context": result["context"]
+    }
 
-# Initialize LLM and get answer
-llm = ChatGroq(model="llama3-8b-8192")
-answer, sources = answer_research_question(
-    "What are effective techniques for handling class imbalance?",
-    collection, 
-    embeddings, 
-    llm
-)
+# Create Gradio interface
+def create_interface():
+    with gr.Blocks() as demo:
+        gr.Markdown("# DCChat - Document Chat Application")
+        
+        with gr.Row():
+            with gr.Column():
+                file_input = gr.File(
+                    label="Upload Documents",
+                    file_types=[".pdf", ".docx", ".txt"],
+                    multiple=True
+                )
+                
+            with gr.Column():
+                question_input = gr.Textbox(
+                    label="Ask a question about the documents",
+                    placeholder="Enter your question here..."
+                )
+                
+        submit_btn = gr.Button("Submit")
+        
+        output = gr.JSON(label="Response")
+        
+        submit_btn.click(
+            fn=chat_interface,
+            inputs=[question_input, file_input],
+            outputs=output
+        )
+    
+    return demo
 
-print("AI Answer:", answer)
-print("\nBased on sources:")
-for source in sources:
-    print(f"- {source['title']}")
+if __name__ == "__main__":
+    demo = create_interface()
+    demo.launch()
