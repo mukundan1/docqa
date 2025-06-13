@@ -1,10 +1,11 @@
 import chromadb
 import os
+import torch
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.document_loaders import TextLoader
 from langchain_groq import ChatGroq
 from langchain.prompts import PromptTemplate
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
 
 # Initialize ChromaDB
 client = chromadb.PersistentClient(path="./research_db")
@@ -69,6 +70,25 @@ def chunk_research_paper(paper_content, title):
         })
     
     return chunk_data
+
+
+#Embed documents
+def embed_documents(documents: list[str]) -> list[list[float]]:
+    """
+    Embed documents using a model.
+    """
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps" if torch.backends.mps.is_available() else "cpu"
+    )
+    model = HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2",
+        model_kwargs={"device": device},
+    )
+
+    embeddings = model.embed_documents(documents)
+    return embeddings
 
 
 #Search and retrieval
